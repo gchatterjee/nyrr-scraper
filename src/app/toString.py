@@ -103,7 +103,7 @@ def getStatusChangeString(raceA: Race, raceB: Race) -> Union[str, None]:
         result = "It is no longer {statusA}."
     else:
         result = "It has changed from {statusA} to {statusB}."
-    return result.format({"statusA": statusA, "statusB": statusB})
+    return result.format_map({"statusA": statusA, "statusB": statusB})
 
 
 def getUrlString(race: Race) -> Union[str, None]:
