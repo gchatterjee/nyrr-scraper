@@ -18,8 +18,8 @@ def create_race(state) -> Race:
     return Race(title, date, time, location, status, url)
 
 
-def get_old_states() -> Dict[str, Race]:
-    states = read_file()
+def get_old_states(environment: str) -> Dict[str, Race]:
+    states = read_file(environment)
     result = {}
     for key in states.keys():
         result[key] = create_race(states[key])

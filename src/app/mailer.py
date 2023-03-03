@@ -9,10 +9,9 @@ from typing import List
 import boto3
 import requests
 from botocore.exceptions import ClientError
+from constants import MAILERLITE_API_TOKEN, REGION, SENDER, SUBSCRIBER_GROUP_NAME
 
 from update import Update
-
-SUBSCRIBER_GROUP_NAME = "scraper-subscribers"
 
 
 logger = logging.getLogger("nyrr-scraper")
@@ -20,15 +19,15 @@ logger = logging.getLogger("nyrr-scraper")
 
 def get_secret():
     logger.debug("getting secret...")
-    secret_name = "nyrr-scraper/mailerlite-api-token"
-    region_name = "us-east-1"
 
     # Create a Secrets Manager client
     session = boto3.session.Session()
-    client = session.client(service_name="secretsmanager", region_name=region_name)
+    client = session.client(service_name="secretsmanager", region_name=REGION)
 
     try:
-        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+        get_secret_value_response = client.get_secret_value(
+            SecretId=MAILERLITE_API_TOKEN
+        )
     except ClientError as e:
         # For a list of exceptions thrown, see
         # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
@@ -66,7 +65,7 @@ def create_campaign(token: str, group_id: str, updates: Update):
                 {
                     "subject": "Update to the Race Index",
                     "from_name": "Race Updates",
-                    "from": "chatterjeegaur@gmail.com",
+                    "from": SENDER,
                     "content": html,
                 }
             ],
@@ -95,7 +94,7 @@ def launch_campaign(token: str, campaign_id: str):
     logger.debug("launched campaign!")
 
 
-def send_emails(updates: List[Update]):
+def send_emails(updates: List[Update], environment: str):
     logger.debug("sending emails...")
     if len(updates) == 0:
         logger.debug("no updates. no emails sent!")
@@ -104,10 +103,12 @@ def send_emails(updates: List[Update]):
     groups = get_groups(token)
     subscriber_group = None
     for group in groups:
-        if group["name"] == SUBSCRIBER_GROUP_NAME:
+        if group["name"] == SUBSCRIBER_GROUP_NAME[environment]:
             subscriber_group = group
     if subscriber_group is None:
-        raise Exception("Unable to find group named `{}`".format(SUBSCRIBER_GROUP_NAME))
+        raise Exception(
+            "Unable to find group named `{}`".format(SUBSCRIBER_GROUP_NAME[environment])
+        )
     campaign = create_campaign(token, subscriber_group["id"], updates)
     launch_campaign(token, campaign["id"])
     logger.debug("emails sent!")

@@ -3,7 +3,6 @@ from selenium import webdriver
 
 import logging
 
-print("__name__", __name__)
 logger = logging.getLogger("nyrr-scraper")
 
 
