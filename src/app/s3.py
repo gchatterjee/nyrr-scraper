@@ -9,7 +9,6 @@ logger = logging.getLogger("nyrr-scraper")
 
 
 S3_CLIENT = boto3.client("s3")
-S3_BUCKET = "nyrr-scraper"
 
 
 def read_file(environment: str):
