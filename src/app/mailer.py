@@ -4,12 +4,19 @@
 # https://aws.amazon.com/developer/language/python/
 
 import logging
-import json
 from typing import List
 import boto3
-import requests
+from mailjet_rest import Client
+import os
 from botocore.exceptions import ClientError
-from constants import MAILERLITE_API_TOKEN, REGION, SENDER, SUBSCRIBER_GROUP_NAME
+from constants import (
+    MAILJET_API_KEY_PUBLIC,
+    MAILJET_API_KEY_PRIVATE,
+    REGION,
+    SENDER,
+    SENDER_EMAIL,
+    SUBSCRIBER_GROUP_NAME,
+)
 
 from update import Update
 
@@ -17,7 +24,14 @@ from update import Update
 logger = logging.getLogger("nyrr-scraper")
 
 
-def get_secret():
+def check_status(response):
+    if not 200 <= response.status_code < 300:
+        raise Exception(
+            "call to mailerjet API returned {} response".format(response.status_code)
+        )
+
+
+def get_secrets():
     logger.debug("getting secret...")
 
     # Create a Secrets Manager client
@@ -25,72 +39,61 @@ def get_secret():
     client = session.client(service_name="secretsmanager", region_name=REGION)
 
     try:
-        get_secret_value_response = client.get_secret_value(
-            SecretId=MAILERLITE_API_TOKEN
-        )
+        mailjet_public_key = client.get_secret_value(SecretId=MAILJET_API_KEY_PUBLIC)
+        mailjet_private_key = client.get_secret_value(SecretId=MAILJET_API_KEY_PRIVATE)
     except ClientError as e:
         # For a list of exceptions thrown, see
         # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
         raise e
 
     # Decrypts secret using the associated KMS key.
-    result = get_secret_value_response["SecretString"]
+    result = {}
+    result["public_key"] = mailjet_public_key["SecretString"]
+    result["private_key"] = mailjet_private_key["SecretString"]
     logging.debug("got secret!")
     return result
 
 
-def get_groups(token: str):
-    logger.debug("getting list of groups...")
-    url = "https://connect.mailerlite.com/api/groups"
-    headers = {"Authorization": "Bearer {}".format(token)}
-    response = requests.request("GET", url, headers=headers)
-    result = response.json()["data"]
+def get_groups(client):
+    response = client.contactslist.get()
+    check_status(response)
+    result = response.json()["Data"]
     logger.debug("got list of groups!")
     return result
 
 
-def create_campaign(token: str, group_id: str, updates: Update):
+def create_campaign(client, group_id: str, updates: Update):
+    logger.debug("creating email campaign...")
+    data = {
+        "Locale": "en_US",
+        "Sender": SENDER,
+        "SenderName": SENDER,
+        "SenderEmail": SENDER_EMAIL,
+        "Subject": "Update to the Race Index",
+        "ContactsListID": group_id,
+        "Title": "Update to the Race Index",
+    }
+    response = client.campaigndraft.create(data=data)
+    check_status(response)
+    campaign_id = response.json()["Data"][0]["ID"]
+    logger.debug("created email campaign!")
+
+    logger.debug("writing content to email campaign...")
     html = ["<b>CHANGES TO THE RACE INDEX</b>"]
     for update in updates:
         html.append(str(update))
     html = "<br/><br/>".join(html)
-
-    logger.debug("creating email campaign...")
-    url = "https://connect.mailerlite.com/api/campaigns"
-    payload = json.dumps(
-        {
-            "name": "Race Updates",
-            "type": "regular",
-            "emails": [
-                {
-                    "subject": "Update to the Race Index",
-                    "from_name": "Race Updates",
-                    "from": SENDER,
-                    "content": html,
-                }
-            ],
-            "groups": [group_id],
-        }
-    )
-    headers = {
-        "Authorization": "Bearer {}".format(token),
-        "Content-Type": "application/json",
+    data = {
+        "Headers": "object",
+        "Html-part": html,
     }
-    response = requests.request("POST", url, headers=headers, data=payload)
-    result = response.json()["data"]
-    logger.debug("created email campaign!")
-    return result
+    response = client.campaigndraft_detailcontent.create(id=campaign_id, data=data)
+    check_status(response)
+    logger.debug("wrote content to email campaign...")
 
-
-def launch_campaign(token: str, campaign_id: str):
     logger.debug("launching campaign...")
-    url = "https://connect.mailerlite.com/api/campaigns/{}/schedule".format(campaign_id)
-    payload = json.dumps({"delivery": "instant"})
-    headers = {
-        "Authorization": "Bearer {}".format(token),
-        "Content-Type": "application/json",
-    }
-    requests.request("POST", url, headers=headers, data=payload)
+    response = client.campaigndraft_send.create(id=campaign_id)
+    check_status(response)
     logger.debug("launched campaign!")
 
 
@@ -99,16 +102,19 @@ def send_emails(updates: List[Update], environment: str):
     if len(updates) == 0:
         logger.debug("no updates. no emails sent!")
         return
-    token = get_secret()
-    groups = get_groups(token)
+    secrets = get_secrets()
+    public_key = secrets["public_key"]
+    private_key = secrets["private_key"]
+    client = Client(auth=(public_key, private_key))
+
+    groups = get_groups(client)
     subscriber_group = None
     for group in groups:
-        if group["name"] == SUBSCRIBER_GROUP_NAME[environment]:
+        if group["Name"] == SUBSCRIBER_GROUP_NAME[environment]:
             subscriber_group = group
     if subscriber_group is None:
         raise Exception(
             "Unable to find group named `{}`".format(SUBSCRIBER_GROUP_NAME[environment])
         )
-    campaign = create_campaign(token, subscriber_group["id"], updates)
-    launch_campaign(token, campaign["id"])
+    create_campaign(client, subscriber_group["ID"], updates)
     logger.debug("emails sent!")
